@@ -1,7 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.Entity;
+using System.Data.Entity.Core.Metadata.Edm;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
+using System.Xml.Linq;
 using System.Runtime.Remoting.Messaging;
 using System.Text;
 using System.Threading.Tasks;
@@ -12,27 +16,80 @@ namespace Cars
     {
         static void Main(string[] args)
         {
-            var cars = ProcessCars("fuel.csv");
-            var manufacturers = ProcessManufacturers("manufacturers.csv");
+            //gives EF permission to drop/create table if model doesnt match schema
+            Database.SetInitializer(new DropCreateDatabaseIfModelChanges<CarDb>());
+            InsertData();
+            QueryData();
+        }
+
+        private static void QueryData()
+        {
+           var db = new  CarDb();
+            db.Database.Log = Console.WriteLine; // will show sql sent to server
 
             var query =
-                from car in cars
-                group car by car.Manufacturer.ToUpper() into manufacturer
-                orderby manufacturer.Key
-                select manufacturer;
-
-            var query2 =
-                cars.GroupBy(c => c.Manufacturer.ToUpper())
-                    .OrderBy(g => g.Key);
+                db.Cars.GroupBy(c => c.Manufacturer)
+                    .Select(g => new
+                    {
+                        Name = g.Key,
+                        Cars = g.OrderByDescending(c => c.Combined).Take(2)
+                    });
+            Console.WriteLine(query.Count());
+          
 
             foreach (var group in query)
             {
-                Console.WriteLine(group.Key);
-                foreach (var car in group.OrderByDescending(c => c.Combined).Take(2))
+                Console.WriteLine(group.Name);
+                foreach (var car in group.Cars)
                 {
                     Console.WriteLine($"\t{car.Name} : {car.Combined}");
                 }
             }
+        }
+
+        private static void InsertData()
+        {
+            var cars = ProcessCars("fuel.csv");
+            var db = new CarDb();
+
+            if (!db.Cars.Any()) //anything there?
+            {
+                foreach (var car in cars)
+                {
+                    db.Cars.Add(car); //note to insert car
+                }
+                db.SaveChanges(); //actually insert cars
+            }
+        }
+
+        private static void QueryXml()
+        {
+            var document = XDocument.Load("fuel.xml");
+            var query =
+                from element in document.Descendants("Car")
+                where element.Attribute("Manufacturer")?.Value == "BMW"
+                select element.Attribute("Name").Value;
+
+            foreach (var name in query)
+            {
+                Console.WriteLine(name);
+            }
+        }
+
+        private static void CreateXml()
+        {
+            var records = ProcessCars("fuel.csv");
+            var document = new XDocument();
+            var cars = new XElement("Cars",
+                from record in records
+                select new XElement("Car",
+                    new XAttribute("Name", record.Name),
+                    new XAttribute("Combined", record.Combined),
+                    new XAttribute("Manufacturer", record.Manufacturer))
+            );
+
+            document.Add(cars);
+            document.Save("fuel.xml");
         }
 
         private static List<Manufacturer> ProcessManufacturers(string path)
@@ -69,6 +126,37 @@ namespace Cars
 
             return query.ToList();
 
+        }
+    }
+
+
+    public class CarStatistics
+    {
+        public CarStatistics()
+        {
+            Min = int.MaxValue;
+            Max = int.MinValue;
+        }
+
+        public CarStatistics Accumulate(Car car)
+        {
+            Count += 1;
+            Total += car.Combined;
+            Max = Math.Max(this.Max, car.Combined);
+            Min = Math.Min(this.Min, car.Combined);
+            return this;
+        }
+
+        public int Max { get; set; }
+        public int Min { get; set; }
+        public double Avg { get; set; }
+        public int Total { get; set; }
+        public int Count { get; set; }
+
+        public CarStatistics Compute()
+        {
+            Avg = Total / Count;
+            return this;
         }
     }
 
